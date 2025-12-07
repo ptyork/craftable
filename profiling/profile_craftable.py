@@ -164,10 +164,10 @@ def scenario_with_pre_post():
     data = generate_test_data(1000, 4, "mixed")
     col_defs = ["<12", ">10.2f", "^8", "<10"]
 
-    def pre_cap(val):
+    def pre_cap(val, row, col_idx):
         return str(val).capitalize()
 
-    def post_bracket(original, text):
+    def post_bracket(original, text, row, col_idx):
         return f"[{text}]"
 
     preprocessors = [pre_cap, None, None, None]

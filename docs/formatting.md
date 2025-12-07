@@ -347,10 +347,10 @@ does not.
 
 Definitions:
 
-  - Preprocessor: `fn(value) -> value`
+  - Preprocessor: `fn(value, row, col_idx) -> value`
 
 
-  - Postprocessor: `fn(original_value, text) -> str`
+  - Postprocessor: `fn(original_value, text, row, col_idx) -> str`
 
 Example:
 
@@ -358,7 +358,7 @@ Example:
 from craftable import get_table
 from rich.console import Console
 
-def fmt_date(value):
+def fmt_date(value, row, col_idx):
     if isinstance(value, date):
         try:
             return value.strftime("%a %b %d, %Y")
@@ -366,7 +366,7 @@ def fmt_date(value):
             print(f"Error formatting date: {e}")
     return value
 
-def fmt_currency(original, text):
+def fmt_currency(original, text, row, col_idx):
     try:
         value = float(original)
         if value < 0:

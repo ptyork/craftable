@@ -1,18 +1,11 @@
-from typing import (
-    Any,
-    Iterator,
-    Iterable,
-    SupportsIndex,
-    overload,
-    TypeAlias,
-    Callable,
-)
+from collections.abc import Callable, Iterable, Iterator
+from typing import Any, IO, overload, SupportsIndex, TypeAlias
+
 from os import get_terminal_size
 from dataclasses import dataclass
 import re
 from textwrap import wrap
 from pathlib import Path
-from typing import IO
 
 from .styles.table_style import TableStyle
 from .styles.no_border_screen_style import NoBorderScreenStyle
@@ -39,10 +32,10 @@ PostprocessorCallbackList: TypeAlias = Iterable[PostprocessorCallback | None]
 MAX_REASONABLE_WIDTH = 120
 
 
-def get_term_width(max_term_width: int = MAX_REASONABLE_WIDTH):
+def get_term_width(max_term_width: int = MAX_REASONABLE_WIDTH) -> int:
     try:
         term_width = get_terminal_size().columns
-    except:  # noqa: E722
+    except Exception:  # Catch any terminal-related errors
         return max_term_width
     if max_term_width == 0:
         max_term_width = 9999
@@ -81,9 +74,10 @@ class FormatSpec:
     type: str = ""
 
     def __str__(self) -> str:
+        width_str = str(self.width) if self.width > 0 else ''
         return (
             f"{self.fill}{self.align}{self.sign}{self.alternate}"
-            f"{self.zero}{self.width if self.width > 0 else ''}{self.grouping}"
+            f"{self.zero}{width_str}{self.grouping}"
             f"{self.precision}{self.type}"
         )
 
@@ -191,22 +185,23 @@ class ColDef:
         if not match:
             raise InvalidColDefError(f"Invalid format specifier for column: {text}")
         spec = match.groupdict()
-        prefix = spec["prefix"] if spec["prefix"] else ""
-        prefix_align = spec["prefix_align"] if spec["prefix_align"] else ""
-        fill = spec["fill"] if spec["fill"] else ""
+        # Use .get() with default instead of ternary expressions
+        prefix = spec.get("prefix") or ""
+        prefix_align = spec.get("prefix_align") or ""
+        fill = spec.get("fill") or ""
         align = spec["align"]
         if not align or align == "=":
             align = ""
             fill = ""
-        sign = spec["sign"] if spec["sign"] else ""
-        alternate = spec["alternate"] if spec["alternate"] else ""
-        zero = spec["zero"] if spec["zero"] else ""
-        width = int(spec["width"]) if spec["width"] else 0
-        grouping = spec["grouping_option"] if spec["grouping_option"] else ""
-        precision = spec["precision"] if spec["precision"] else ""
-        type_ = spec["type"] if spec["type"] else ""
-        suffix_align = spec["suffix_align"] if spec["suffix_align"] else ""
-        suffix = spec["suffix"] if spec["suffix"] else ""
+        sign = spec.get("sign") or ""
+        alternate = spec.get("alternate") or ""
+        zero = spec.get("zero") or ""
+        width = int(spec["width"]) if spec.get("width") else 0
+        grouping = spec.get("grouping_option") or ""
+        precision = spec.get("precision") or ""
+        type_ = spec.get("type") or ""
+        suffix_align = spec.get("suffix_align") or ""
+        suffix = spec.get("suffix") or ""
 
         auto_size = False
         truncate = False
@@ -267,10 +262,11 @@ class ColDefList(list[ColDef]):
     A list of ColDef objects.
     """
 
-    def __init__(self, iterable: Iterable = []):
+    def __init__(self, iterable: Iterable | None = None) -> None:
         super().__init__()
-        for val in iterable:
-            self.append(val)
+        if iterable is not None:
+            for val in iterable:
+                self.append(val)
         self._adjusted = False
         self._cached_list = None
 
@@ -280,7 +276,7 @@ class ColDefList(list[ColDef]):
     @overload
     def __setitem__(self, key: slice, value: Iterable[str | ColDef], /) -> None: ...
 
-    def __setitem__(self, key, value):
+    def __setitem__(self, key, value) -> None:
         if isinstance(key, SupportsIndex):
             if isinstance(value, str):
                 super().__setitem__(key, ColDef.parse(value))
@@ -310,7 +306,7 @@ class ColDefList(list[ColDef]):
     def __iter__(self) -> Iterator[ColDef]:
         return super().__iter__()
 
-    def append(self, object):
+    def append(self, object) -> None:
         if isinstance(object, str):
             super().append(ColDef.parse(object))
         elif isinstance(object, ColDef):
@@ -399,19 +395,14 @@ class ColDefList(list[ColDef]):
         non_text_len = padding_len + border_len + delims_len
         total_len = non_text_len + sum([c.width for c in self])
 
-        fill_cols = [col_idx for col_idx in range(len(self)) if self[col_idx].auto_fill]
+        fill_cols = [col_idx for col_idx, col in enumerate(self) if col.auto_fill]
         if not fill_cols:
             if total_len <= table_width:
                 return
             else:
-                largest_col = self[0]
-                largest_col_idx = 0
-                for col_idx in range(1, len(self)):
-                    col_def = self[col_idx]
-                    if col_def.width > largest_col.width:
-                        largest_col = col_def
-                        largest_col_idx = col_idx
-                largest_col.auto_fill = True
+                # Find the column with the largest width
+                largest_col_idx = max(range(len(self)), key=lambda i: self[i].width)
+                self[largest_col_idx].auto_fill = True
                 fill_cols.append(largest_col_idx)
 
         fixed_len = sum([c.width for c in self if not c.auto_fill])
@@ -451,6 +442,44 @@ class ColDefList(list[ColDef]):
 ###############################################################################
 # col_def helpers
 ###############################################################################
+
+
+def _copy_and_normalize(
+    value_rows: Iterable[Iterable[Any]],
+    header_row: Iterable[Any] | None,
+    col_defs: Iterable[str] | Iterable[ColDef] | ColDefList | None = None,
+    header_defs: Iterable[str] | Iterable[ColDef] | ColDefList | None = None,
+) -> tuple[
+    list[list[Any]], list[Any] | None, ColDefList | None, ColDefList | None, int
+]:
+    _value_rows: list[list[Any]] = [list(row) for row in value_rows]
+    max_cols = max((len(row) for row in _value_rows), default=0)
+
+    for row in _value_rows:
+        row.extend([None] * (max_cols - len(row)))
+        del row[max_cols:]
+
+    _header_row: list[Any] | None = None
+    if header_row:
+        _header_row = [str(col) for col in header_row]
+        _header_row.extend([""] * (max_cols - len(_header_row)))
+        del _header_row[max_cols:]
+
+    _col_defs: ColDefList | None = None
+    if col_defs:
+        _col_defs = ColDefList(col_defs)
+        for _ in range(max_cols - len(_col_defs)):
+            _col_defs.append(ColDef())
+        del _col_defs[max_cols:]
+
+    _header_defs: ColDefList | None = None
+    if header_defs:
+        _header_defs = ColDefList(header_defs)
+        for _ in range(max_cols - len(_header_defs)):
+            _header_defs.append(ColDef())
+        del _header_defs[max_cols:]
+
+    return _value_rows, _header_row, _col_defs, _header_defs, max_cols
 
 
 def _get_adjusted_col_defs(
@@ -509,7 +538,7 @@ def _generate_header_defs(
         # if the defs are supplied, we only support alignment so just extract that
         if header_defs:
             _header_defs = ColDefList(header_defs)
-            for col_idx in range(len(col_defs)):
+            for col_idx, _ in enumerate(col_defs):
                 if col_idx < len(_header_defs):
                     header_def = _header_defs[col_idx]
                     if header_def.align:
@@ -573,7 +602,7 @@ def _get_table_row(
         # Append the collected lines for this column once
         all_col_lines.append(col_lines)
 
-    max_rows = max([len(col) for col in all_col_lines])
+    max_rows = max((len(col) for col in all_col_lines), default=1)
 
     if max_rows == 1:
         # Single line per column; build a single row of cells
@@ -787,7 +816,7 @@ def get_table_header(
     left = str(style.header_bottom_left)
     right = line if lazy_end else str(style.header_bottom_right)
     border_lines = []
-    for col_idx in range(len(header_cols)):
+    for col_idx, _ in enumerate(header_cols):
         header_def = _header_defs[col_idx]
         if not style.align_char:
             h_line = line * (header_def.width + padding_width)
@@ -912,24 +941,22 @@ def get_table(
 
     padding_width = 2 * style.cell_padding
 
-    # convert / copy the rows to a list of lists. Slight overhead but it helps
-    # with consistency and prevents accidentally modifying the caller's data.
-    _value_rows: list[list[Any]] = [list(row) for row in value_rows]
-    _header_row: list[Any] | None = None
-    if header_row:
-        _header_row = [str(col) for col in header_row]
+    _value_rows, _header_row, _col_defs, _header_defs, max_cols = _copy_and_normalize(
+        value_rows,
+        header_row,
+        col_defs,
+        header_defs,
+    )
 
     # createa a second (shallow) copy to help with calculating column widths
     all_rows = _value_rows.copy()
     if _header_row:
         all_rows.insert(0, _header_row)
 
-    max_cols = max(len(row) for row in all_rows)
-
     _col_defs = _get_adjusted_col_defs(
         all_rows=all_rows,
         style=style,
-        col_defs=col_defs,
+        col_defs=_col_defs,
         table_width=table_width,
         preprocessors=preprocessors,
         postprocessors=postprocessors,
@@ -937,13 +964,9 @@ def get_table(
     )
 
     if not header_row and style.force_header:
-        header_row = [""] * max_cols
+        _header_row = [""] * max_cols
 
-    _header_defs = _generate_header_defs(
-        header_row=_header_row,
-        header_defs=header_defs,
-        col_defs=_col_defs,
-    )
+    _header_defs = _generate_header_defs(_header_row, _header_defs, _col_defs)
 
     # Delegate to a custom renderer when the style provides one (e.g., HTML/LaTeX)
     renderer = getattr(style, "render_table", None)
@@ -953,10 +976,6 @@ def get_table(
     # Generate header and rows
     output_rows = []
     if _header_row:
-        if len(_header_row) < max_cols:
-            # pad header row
-            diff = max_cols - len(_header_row)
-            _header_row.extend([""] * diff)
         row = get_table_header(
             header_cols=_header_row,
             style=style,
@@ -982,10 +1001,6 @@ def get_table(
     for values in _value_rows:
         rowcount += 1
         lastrow = rowcount == len(_value_rows)
-        if len(values) < max_cols:
-            # pad row
-            diff = max_cols - len(values)
-            values.extend([""] * diff)
         row = _get_table_row(
             values=values,
             style=style,
@@ -1089,11 +1104,12 @@ def export_table(
         - Otherwise, returns the rendered content as a string.
     """
 
-    # Normalize inputs similar to get_table()
-    _value_rows: list[list[Any]] = [list(row) for row in value_rows]
-    _header_row: list[Any] | None = None
-    if header_row:
-        _header_row = [str(col) for col in header_row]
+    _value_rows, _header_row, _col_defs, _header_defs, max_cols = _copy_and_normalize(
+        value_rows,
+        header_row,
+        col_defs,
+        header_defs,
+    )
 
     all_rows = _value_rows.copy()
     if _header_row:
@@ -1113,11 +1129,7 @@ def export_table(
     if not header_row and style.force_header:
         header_row = [""] * max_cols
 
-    _header_defs = _generate_header_defs(
-        header_row=_header_row,
-        header_defs=header_defs,
-        col_defs=_col_defs,
-    )
+    _header_defs = _generate_header_defs(_header_row, _header_defs, _col_defs)
 
     # Prefer explicit writer when available
     writer = getattr(style, "write_table", None)
@@ -1154,8 +1166,8 @@ def export_table(
 
     # Fallback to core text renderer
     content = get_table(
-        value_rows,
-        header_row=header_row,
+        _value_rows,
+        header_row=_header_row,
         style=style,
         col_defs=_col_defs,
         header_defs=_header_defs,
